@@ -234,7 +234,47 @@ namespace ManualMapInjector
                 NativeMethods.VirtualFreeEx(hProcess, pShell,   0, NativeMethods.MEM_RELEASE);
                 NativeMethods.VirtualFreeEx(hProcess, pMapData, 0, NativeMethods.MEM_RELEASE);
 
+                if (success)
+                {
+                    WriteRemote(hProcess, pTarget, new byte[0x1000]);
+                    AdjustSectionProtections(hProcess, pTarget, pSrc, secOff,
+                        nt->FileHeader.NumberOfSections);
+                }
+
                 return success;
+            }
+        }
+
+        private static unsafe void AdjustSectionProtections(
+            IntPtr hProcess, IntPtr pBase, byte* pSrc, int secOff, ushort numSections)
+        {
+            const uint IMAGE_SCN_MEM_EXECUTE = 0x20000000;
+            const uint IMAGE_SCN_MEM_READ    = 0x40000000;
+            const uint IMAGE_SCN_MEM_WRITE   = 0x80000000;
+
+            for (int i = 0; i < numSections; i++)
+            {
+                var sec = (IMAGE_SECTION_HEADER*)(pSrc + secOff
+                          + i * sizeof(IMAGE_SECTION_HEADER));
+
+                if (sec->Misc_VirtualSize == 0) continue;
+
+                uint chars = sec->Characteristics;
+                bool canExec  = (chars & IMAGE_SCN_MEM_EXECUTE) != 0;
+                bool canRead  = (chars & IMAGE_SCN_MEM_READ)    != 0;
+                bool canWrite = (chars & IMAGE_SCN_MEM_WRITE)   != 0;
+
+                uint protect;
+                if (canExec && canWrite)      protect = NativeMethods.PAGE_EXECUTE_READWRITE;
+                else if (canExec && canRead)  protect = NativeMethods.PAGE_EXECUTE_READ;
+                else if (canExec)             protect = NativeMethods.PAGE_EXECUTE;
+                else if (canWrite)            protect = NativeMethods.PAGE_READWRITE;
+                else                          protect = NativeMethods.PAGE_READONLY;
+
+                IntPtr secAddr = (IntPtr)((long)pBase + sec->VirtualAddress);
+                uint old = 0;
+                NativeMethods.VirtualProtectEx(hProcess, secAddr,
+                    sec->Misc_VirtualSize, protect, out old);
             }
         }
 
@@ -340,7 +380,10 @@ namespace ManualMapInjector
         public const uint MEM_COMMIT             = 0x1000;
         public const uint MEM_RESERVE            = 0x2000;
         public const uint MEM_RELEASE            = 0x8000;
+        public const uint PAGE_READONLY          = 0x02;
         public const uint PAGE_READWRITE         = 0x04;
+        public const uint PAGE_EXECUTE           = 0x10;
+        public const uint PAGE_EXECUTE_READ      = 0x20;
         public const uint PAGE_EXECUTE_READWRITE = 0x40;
 
         [DllImport("kernel32.dll", SetLastError = true)]
